@@ -2252,6 +2252,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     try{ localStorage.setItem(STORAGE_KEY_DELETED, JSON.stringify(deletedReports)); }catch(e){}
   }
 
+  // Dipakai bareng ensureReportDataLoaded() di bawah: supaya kalau laporan yang BARU SAJA
+  // disimpan di HP ini langsung dibuka-edit lagi (sebelum sinkronisasi fire-and-forget ke
+  // Sheets sempat selesai), fetch paksa itu tidak balikin data yang lebih lama lalu menimpa
+  // foto yang baru saja diambil. Jendela toleransi singkat saja (sinkronisasi normal cuma
+  // perlu beberapa detik) — di luar jendela ini tetap selalu fetch ulang dari Sheets.
+  var recentlySavedAt = {}; // reportId -> timestamp ms (Date.now())
+  var RECENT_SAVE_GRACE_MS = 20000;
+
   function saveCurrentReport(){
     var data = collectReportData();
     var percent = computeProgress(data);
@@ -2267,6 +2275,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var rec = { id: currentReportId, plantName: data.siteInfo.plantName, plantAddress: data.siteInfo.plantAddress, updatedAt: now, progressPercent: percent, createdBy: createdBy, data: data };
     if(idx >= 0){ reports[idx] = rec; } else { reports.push(rec); }
     saveReportsToStorage();
+    recentlySavedAt[currentReportId] = Date.now();
     return rec;
   }
 
@@ -2438,15 +2447,34 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // itu ada di tab terpisah "ReportData"). Fungsi ini mengambilnya begitu laporan itu benar-
   // benar mau dibuka (edit/cetak/export), dan menampilkan overlay loading singkat selagi
   // menunggu.
+  //
+  // PENTING (bug yang diperbaiki): dulu kalau `rec.data` SUDAH ada di cache lokal (localStorage
+  // HP ini) — walaupun datanya versi LAMA/belum lengkap — fungsi ini langsung skip dan tidak
+  // pernah ambil ulang dari Google Sheets. Ini bikin foto yang diupload dari HP/teknisi LAIN
+  // (lalu tersinkron ke Sheets) jadi tidak pernah muncul kalau laporan yang sama dibuka-edit
+  // dari HP ini, karena HP ini sudah kadung punya cache lokalnya sendiri (dari sesi
+  // sebelumnya) yang lebih lama dan tidak pernah di-refresh. Sekarang SELALU ambil versi
+  // terbaru dari Google Sheets setiap kali laporan dibuka untuk edit/cetak/export — cache
+  // lokal cuma dipakai sebagai fallback kalau sedang offline/gagal fetch (lihat .catch di
+  // bawah), bukan lagi sebagai alasan untuk skip fetch.
+  //
+  // Pengecualian: kalau laporan ini BARU SAJA disimpan di HP ini sendiri (lihat
+  // recentlySavedAt di atas), fetch paksa ini DILEWATI untuk sementara — sinkronisasi ke
+  // Sheets jalan di latar belakang (fire-and-forget) dan butuh beberapa detik, jadi fetch
+  // yang dipaksakan tepat setelah simpan bisa saja malah balikin versi SEBELUM foto yang
+  // baru saja diambil, lalu menimpanya. Di luar jendela waktu singkat ini, tetap selalu
+  // fetch ulang seperti biasa.
   function ensureReportDataLoaded(rec, cb){
     if(!rec){ cb(); return; }
-    if(rec.data){ cb(); return; }
+    var savedRecently = recentlySavedAt[rec.id] && (Date.now() - recentlySavedAt[rec.id] < RECENT_SAVE_GRACE_MS);
+    if(savedRecently && rec.data){ cb(); return; }
     setLoadOverlay(true);
     gsGet('getReport', { id: rec.id }).then(function(res){
       setLoadOverlay(false);
       if(res && res.ok && res.data){ rec.data = res.data; saveReportsToStorage(); }
+      else if(!rec.data){ /* fetch gagal/kosong & belum ada cache sama sekali — biarkan rec.data undefined, pemanggil (loadReportIntoWizard dst.) sudah terbiasa fallback ke {} */ }
       cb();
-    }).catch(function(){ setLoadOverlay(false); cb(); });
+    }).catch(function(){ setLoadOverlay(false); cb(); }); // offline/gagal — tetap jalan pakai rec.data cache lokal apa adanya (fallback), bukan diblokir total
   }
 
   function setLoadOverlay(show){
