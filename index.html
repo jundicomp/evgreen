@@ -3144,7 +3144,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // Karena semua baris duduk di atas grid kolom yang sama persis, sisi kiri & kanan tabel di
   // section mana pun otomatis sejajar — tidak mungkin lagi "melenceng" sendiri seperti waktu
   // tiap section jadi <table> HTML terpisah.
-  var XLSX_COLS = [16, 12, 12, 12, 16, 12, 12, 12]; // 8 kolom (A-H): label|value(3)|label|value(3)
+  // Lebar kolom disamakan PERSIS dengan file referensi ("ikutin_laporan_ini_yaa.xlsx"): cuma
+  // kolom label (A, E) dan kolom pertama area isi (B, F) yang disetel eksplisit; C/D/G/H
+  // dibiarkan di lebar standar Excel (8.43) sama seperti di file aslinya.
+  var XLSX_COLS = [16, 12, 8.43, 8.43, 16, 12, 8.43, 8.43]; // 8 kolom (A-H): label|value(3)|label|value(3)
   var XLSX_BORDER_THIN = { style: 'thin', color: { argb: 'FF333333' } };
   var XLSX_BORDER_ALL = { top: XLSX_BORDER_THIN, left: XLSX_BORDER_THIN, bottom: XLSX_BORDER_THIN, right: XLSX_BORDER_THIN };
   var XLSX_FILL_SECTION = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC9CCD1' } };
@@ -3394,6 +3397,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     cell.font = { bold: true, size: 12, color: { argb: XLSX_BLACK } };
     cell.fill = XLSX_FILL_SECTION;
     cell.alignment = { vertical: 'middle' };
+    ws.getRow(rowIdx).height = 15.75; // sama seperti file referensi
     xlsxBorderRow(ws, rowIdx);
     return rowIdx + 1;
   }
@@ -3425,96 +3429,60 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return rowIdx + 1;
   }
 
-  // Sebuah "sisi" (A atau B) dianggap kosong kalau tipe-nya foto tapi belum ada foto yang
-  // diambil. Sisi bertipe teks TIDAK pernah dianggap kosong karena selalu ada nilai acuan
-  // tetap (fallback, mis. "Waiting Done KWH" / "From Vgreen") yang memang isi aslinya.
-  function xlsxCardSideEmpty(type, value){
-    return type === 'photo' && !value;
+  // Satu baris per kartu (label + isi di baris YANG SAMA, bukan label-row lalu value-row
+  // terpisah) — label di kolom A (atau E), foto/teks di B:D (atau F:H), semuanya di satu
+  // baris setinggi 95.1pt. Ini PERSIS mengikuti layout file referensi asli (TEMPLATE
+  // COMMTEST 1.xlsx / "ikutin_laporan_ini_yaa.xlsx" yang dikirim user): kalau fotonya belum
+  // ada, sel isi tetap ditampilkan berisi teks "Belum ada foto" (bukan dihilangkan), dan
+  // kalau cuma 1 item (mis. "Grounding Test (Ω)"), separuh kanan (E-H) memang dibiarkan
+  // kosong tanpa isi apa pun — itu pola aslinya, bukan bug untuk diperbaiki lagi.
+  function xlsxCardLabelCell(ws, rowIdx, col, label){
+    var cell = ws.getCell(rowIdx, col);
+    cell.value = label;
+    cell.font = { bold: true, size: 10.5, color: { argb: XLSX_BLACK } };
+    cell.fill = XLSX_FILL_CARD_LABEL;
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
   }
 
-  function xlsxCardPairRow(wb, ws, rowIdx, labelA, typeA, valueA, fallbackA, labelB, typeB, valueB, fallbackB){
-    var hasB = (labelB != null);
-    var emptyA = xlsxCardSideEmpty(typeA, valueA);
-    var emptyB = hasB ? xlsxCardSideEmpty(typeB, valueB) : true;
-
-    // Baris yang kedua sisinya kosong (belum ada foto sama sekali) dihilangkan total —
-    // tidak memakan baris/kolom sama sekali di file export. Judul section tetap tampil
-    // (lihat xlsxSectionRow/xlsxSubHeadRow) meskipun semua barisnya lenyap begini, sebagai
-    // penanda bagian itu memang belum ada progress sama sekali.
-    if(emptyA && emptyB){ return rowIdx; }
-
-    // Cuma salah satu sisi yang ada isinya (atau memang cuma 1 item, mis. "Grounding Test
-    // (Ω)") -> tampilkan sisi itu saja, melebar penuh A-H, tanpa sisa kolom kosong.
-    var single = emptyA || emptyB;
-    var sLabel = emptyA ? labelB : labelA;
-    var sType = emptyA ? typeB : typeA;
-    var sValue = emptyA ? valueB : valueA;
-    var sFallback = emptyA ? fallbackB : fallbackA;
-
-    var labelRow = rowIdx, valueRow = rowIdx + 1;
-    if(single){
-      ws.mergeCells(labelRow, 1, labelRow, 8);
-      ws.mergeCells(valueRow, 1, valueRow, 8);
-      var singleLabelCell = ws.getCell(labelRow, 1);
-      singleLabelCell.value = sLabel;
-      singleLabelCell.font = { bold: true, size: 10.5, color: { argb: XLSX_BLACK } };
-      singleLabelCell.fill = XLSX_FILL_CARD_LABEL;
-      singleLabelCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-    } else {
-      ws.mergeCells(labelRow, 1, labelRow, 1);
-      ws.mergeCells(labelRow, 2, labelRow, 4);
-      ws.mergeCells(labelRow, 5, labelRow, 5);
-      ws.mergeCells(labelRow, 6, labelRow, 8);
-      [[1, labelA], [5, labelB]].forEach(function(pair){
-        var col = pair[0], label = pair[1];
-        var cell = ws.getCell(labelRow, col);
-        if(label != null){
-          cell.value = label;
-          cell.font = { bold: true, size: 10.5, color: { argb: XLSX_BLACK } };
-          cell.fill = XLSX_FILL_CARD_LABEL;
-          cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-        }
-      });
-      ws.mergeCells(valueRow, 1, valueRow, 1);
-      ws.mergeCells(valueRow, 2, valueRow, 4);
-      ws.mergeCells(valueRow, 5, valueRow, 5);
-      ws.mergeCells(valueRow, 6, valueRow, 8);
-    }
-    xlsxBorderRow(ws, labelRow);
-
-    // Baris foto sungguhan butuh tinggi (biar fotonya kebaca) — baris isi cuma teks singkat
-    // (mis. "From Vgreen", angka voltase) tidak perlu setinggi itu, jadi dibikin jauh lebih
-    // pendek supaya tidak nyisain banyak ruang kosong mubazir di bawah/atas teksnya.
-    var hasPhotoType = single ? (sType === 'photo') : (typeA === 'photo' || typeB === 'photo');
-    ws.getRow(valueRow).height = hasPhotoType ? 95 : 24;
-    function fillValueCell(colStart, colEnd, type, value, fallback){
-      var cell = ws.getCell(valueRow, colStart);
-      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-      if(type === 'photo'){
-        var resolved = value ? xlsxImageMap[value] : null;
-        if(resolved && xlsxEmbedImageInRange(wb, ws, resolved, valueRow, colStart, colEnd)){
-          return; // foto sungguhan berhasil ditanam, sel dibiarkan kosong (gambarnya melayang di atasnya)
-        }
-        // Catatan: titik ini cuma kena untuk sisi yang SUDAH dipastikan tidak kosong tapi
-        // gagal ditanam (mis. gambar gagal dimuat) — bukan untuk sisi yang memang belum ada
-        // fotonya (itu sudah difilter di atas dan baris/sisinya tidak pernah sampai sini).
+  function xlsxCardValueCell(wb, ws, rowIdx, colStart, colEnd, type, value, fallback){
+    var cell = ws.getCell(rowIdx, colStart);
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    if(type === 'photo'){
+      var resolved = value ? xlsxImageMap[value] : null;
+      if(resolved && xlsxEmbedImageInRange(wb, ws, resolved, rowIdx, colStart, colEnd)){
+        return; // foto sungguhan berhasil ditanam, sel dibiarkan kosong (gambarnya melayang di atasnya)
+      }
+      if(value){
         cell.value = { richText: [
           { font: { bold: true, size: 11, color: { argb: XLSX_GREEN } }, text: 'Ada foto\n' },
           { font: { size: 9.5, color: { argb: XLSX_BLACK } }, text: '(lihat PDF/Cetak)' }
         ] };
-      } else if(type === 'text'){
-        cell.value = value || fallback || '-';
-        cell.font = { bold: true, color: { argb: XLSX_BLACK } };
+      } else {
+        cell.value = 'Belum ada foto';
+        cell.font = { size: 10.5, color: { argb: XLSX_BLACK } };
       }
+    } else if(type === 'text'){
+      cell.value = value || fallback || '-';
+      cell.font = { bold: true, color: { argb: XLSX_BLACK } };
     }
-    if(single){
-      fillValueCell(1, 8, sType, sValue, sFallback);
-    } else {
-      fillValueCell(2, 4, typeA, valueA, fallbackA);
-      fillValueCell(6, 8, typeB, valueB, fallbackB);
+  }
+
+  function xlsxCardPairRow(wb, ws, rowIdx, labelA, typeA, valueA, fallbackA, labelB, typeB, valueB, fallbackB){
+    var hasB = (labelB != null);
+    ws.getRow(rowIdx).height = 95.1;
+
+    xlsxCardLabelCell(ws, rowIdx, 1, labelA);
+    ws.mergeCells(rowIdx, 2, rowIdx, 4);
+    xlsxCardValueCell(wb, ws, rowIdx, 2, 4, typeA, valueA, fallbackA);
+
+    if(hasB){
+      xlsxCardLabelCell(ws, rowIdx, 5, labelB);
+      ws.mergeCells(rowIdx, 6, rowIdx, 8);
+      xlsxCardValueCell(wb, ws, rowIdx, 6, 8, typeB, valueB, fallbackB);
     }
-    xlsxBorderRow(ws, valueRow);
-    return valueRow + 1;
+
+    xlsxBorderRow(ws, rowIdx);
+    return rowIdx + 1;
   }
 
   function xlsxPhotoPairRow(wb, ws, rowIdx, labelA, urlA, labelB, urlB){
@@ -3551,7 +3519,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   function xlsxApprovalDataRow(wb, ws, rowIdx, role, p){
     var hasSig = !!(p && p.signature);
-    ws.getRow(rowIdx).height = 40; // sedikit lebih tinggi dari default supaya gambar tanda tangan (kalau ada) kebaca
+    ws.getRow(rowIdx).height = 39.95; // sama seperti file referensi — cukup buat tanda tangan kebaca
     ws.mergeCells(rowIdx, 1, rowIdx, 2);
     ws.mergeCells(rowIdx, 3, rowIdx, 4);
     ws.mergeCells(rowIdx, 5, rowIdx, 6);
@@ -3590,7 +3558,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     ws.mergeCells(row, 5, row, 8);
     var vgreenLogoCell = ws.getCell(row, 1);
     var vendorLogoCell = ws.getCell(row, 5);
-    ws.getRow(row).height = 50; // cukup tinggi buat logo sungguhan yang ditanam
+    ws.getRow(row).height = 50.1; // cukup tinggi buat logo sungguhan yang ditanam (sama seperti file referensi)
     var vgreenLogoResolved = logos.vgreen ? xlsxImageMap[logos.vgreen] : null;
     if(!(vgreenLogoResolved && xlsxEmbedImageInRange(wb, ws, vgreenLogoResolved, row, 1, 4))){
       if(logos.vgreen){ vgreenLogoCell.value = 'Logo tersedia'; vgreenLogoCell.font = { bold: true, color: { argb: XLSX_GREEN } }; }
