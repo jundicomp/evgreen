@@ -1026,6 +1026,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }).then(function(r){ return r.json(); });
   }
 
+  // Nama dasar file export (Excel/PDF/Cetak) — dipakai bareng supaya semua jenis file yang
+  // di-export namanya konsisten: "COMM TEST REPORT <plant-name-slug>" (sebelumnya "laporan-...").
+  function buildExportFileSlug(plantName){
+    return (plantName || 'laporan').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  }
+  function buildExportFileBaseName(plantName){
+    return 'COMM TEST REPORT ' + buildExportFileSlug(plantName);
+  }
+
   // ---------------- field definitions (mirrors TEMPLATE COMMTEST 1.xlsx / the sample PDF report) ----------------
   var EV_CHARGER_PAIRS = [
     ['frontOpen','Front View (Open)','sideRight','Side View (Right)'],
@@ -2110,7 +2119,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     // browser tetap tampil, isinya rapi (bukan "Wizard Commissioning Report - EV Charger").
     function printReview(){
       var originalTitle = document.title;
-      document.title = (siteInfo.plantName || 'Commissioning Report') + ' - ' + (siteInfo.reportDate || '');
+      document.title = buildExportFileBaseName(siteInfo.plantName);
       window.print();
       setTimeout(function(){ document.title = originalTitle; }, 500);
     }
@@ -3107,7 +3116,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     setTimeout(function(){
       var reviewIdx = tabs.length - 1;
       showTab(reviewIdx);
-      setTimeout(function(){ window.print(); }, 80);
+      setTimeout(function(){
+        // Samakan dengan printReview(): nama file PDF yang disarankan browser ikut format
+        // "COMM TEST REPORT <plant>" juga, bukan judul halaman bawaan.
+        var originalTitle = document.title;
+        document.title = buildExportFileBaseName(rec.plantName || (rec.data && rec.data.siteInfo && rec.data.siteInfo.plantName));
+        window.print();
+        setTimeout(function(){ document.title = originalTitle; }, 500);
+      }, 80);
     }, 0);
   }
 
@@ -3409,29 +3425,68 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return rowIdx + 1;
   }
 
+  // Sebuah "sisi" (A atau B) dianggap kosong kalau tipe-nya foto tapi belum ada foto yang
+  // diambil. Sisi bertipe teks TIDAK pernah dianggap kosong karena selalu ada nilai acuan
+  // tetap (fallback, mis. "Waiting Done KWH" / "From Vgreen") yang memang isi aslinya.
+  function xlsxCardSideEmpty(type, value){
+    return type === 'photo' && !value;
+  }
+
   function xlsxCardPairRow(wb, ws, rowIdx, labelA, typeA, valueA, fallbackA, labelB, typeB, valueB, fallbackB){
+    var hasB = (labelB != null);
+    var emptyA = xlsxCardSideEmpty(typeA, valueA);
+    var emptyB = hasB ? xlsxCardSideEmpty(typeB, valueB) : true;
+
+    // Baris yang kedua sisinya kosong (belum ada foto sama sekali) dihilangkan total —
+    // tidak memakan baris/kolom sama sekali di file export. Judul section tetap tampil
+    // (lihat xlsxSectionRow/xlsxSubHeadRow) meskipun semua barisnya lenyap begini, sebagai
+    // penanda bagian itu memang belum ada progress sama sekali.
+    if(emptyA && emptyB){ return rowIdx; }
+
+    // Cuma salah satu sisi yang ada isinya (atau memang cuma 1 item, mis. "Grounding Test
+    // (Ω)") -> tampilkan sisi itu saja, melebar penuh A-H, tanpa sisa kolom kosong.
+    var single = emptyA || emptyB;
+    var sLabel = emptyA ? labelB : labelA;
+    var sType = emptyA ? typeB : typeA;
+    var sValue = emptyA ? valueB : valueA;
+    var sFallback = emptyA ? fallbackB : fallbackA;
+
     var labelRow = rowIdx, valueRow = rowIdx + 1;
-    ws.mergeCells(labelRow, 1, labelRow, 1);
-    ws.mergeCells(labelRow, 2, labelRow, 4);
-    ws.mergeCells(labelRow, 5, labelRow, 5);
-    ws.mergeCells(labelRow, 6, labelRow, 8);
-    [[1, labelA], [5, labelB]].forEach(function(pair){
-      var col = pair[0], label = pair[1];
-      var cell = ws.getCell(labelRow, col);
-      if(label != null){
-        cell.value = label;
-        cell.font = { bold: true, size: 10.5, color: { argb: XLSX_BLACK } };
-        cell.fill = XLSX_FILL_CARD_LABEL;
-        cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
-      }
-    });
+    if(single){
+      ws.mergeCells(labelRow, 1, labelRow, 8);
+      ws.mergeCells(valueRow, 1, valueRow, 8);
+      var singleLabelCell = ws.getCell(labelRow, 1);
+      singleLabelCell.value = sLabel;
+      singleLabelCell.font = { bold: true, size: 10.5, color: { argb: XLSX_BLACK } };
+      singleLabelCell.fill = XLSX_FILL_CARD_LABEL;
+      singleLabelCell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    } else {
+      ws.mergeCells(labelRow, 1, labelRow, 1);
+      ws.mergeCells(labelRow, 2, labelRow, 4);
+      ws.mergeCells(labelRow, 5, labelRow, 5);
+      ws.mergeCells(labelRow, 6, labelRow, 8);
+      [[1, labelA], [5, labelB]].forEach(function(pair){
+        var col = pair[0], label = pair[1];
+        var cell = ws.getCell(labelRow, col);
+        if(label != null){
+          cell.value = label;
+          cell.font = { bold: true, size: 10.5, color: { argb: XLSX_BLACK } };
+          cell.fill = XLSX_FILL_CARD_LABEL;
+          cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+        }
+      });
+      ws.mergeCells(valueRow, 1, valueRow, 1);
+      ws.mergeCells(valueRow, 2, valueRow, 4);
+      ws.mergeCells(valueRow, 5, valueRow, 5);
+      ws.mergeCells(valueRow, 6, valueRow, 8);
+    }
     xlsxBorderRow(ws, labelRow);
 
-    ws.mergeCells(valueRow, 1, valueRow, 1);
-    ws.mergeCells(valueRow, 2, valueRow, 4);
-    ws.mergeCells(valueRow, 5, valueRow, 5);
-    ws.mergeCells(valueRow, 6, valueRow, 8);
-    ws.getRow(valueRow).height = 95; // cukup tinggi buat foto sungguhan yang ditanam (bukan cuma status teks)
+    // Baris foto sungguhan butuh tinggi (biar fotonya kebaca) — baris isi cuma teks singkat
+    // (mis. "From Vgreen", angka voltase) tidak perlu setinggi itu, jadi dibikin jauh lebih
+    // pendek supaya tidak nyisain banyak ruang kosong mubazir di bawah/atas teksnya.
+    var hasPhotoType = single ? (sType === 'photo') : (typeA === 'photo' || typeB === 'photo');
+    ws.getRow(valueRow).height = hasPhotoType ? 95 : 24;
     function fillValueCell(colStart, colEnd, type, value, fallback){
       var cell = ws.getCell(valueRow, colStart);
       cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
@@ -3440,22 +3495,24 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if(resolved && xlsxEmbedImageInRange(wb, ws, resolved, valueRow, colStart, colEnd)){
           return; // foto sungguhan berhasil ditanam, sel dibiarkan kosong (gambarnya melayang di atasnya)
         }
-        if(value){
-          cell.value = { richText: [
-            { font: { bold: true, size: 11, color: { argb: XLSX_GREEN } }, text: 'Ada foto\n' },
-            { font: { size: 9.5, color: { argb: XLSX_BLACK } }, text: '(lihat PDF/Cetak)' }
-          ] };
-        } else {
-          cell.value = 'Belum ada foto';
-          cell.font = { size: 10.5, color: { argb: XLSX_BLACK } };
-        }
+        // Catatan: titik ini cuma kena untuk sisi yang SUDAH dipastikan tidak kosong tapi
+        // gagal ditanam (mis. gambar gagal dimuat) — bukan untuk sisi yang memang belum ada
+        // fotonya (itu sudah difilter di atas dan baris/sisinya tidak pernah sampai sini).
+        cell.value = { richText: [
+          { font: { bold: true, size: 11, color: { argb: XLSX_GREEN } }, text: 'Ada foto\n' },
+          { font: { size: 9.5, color: { argb: XLSX_BLACK } }, text: '(lihat PDF/Cetak)' }
+        ] };
       } else if(type === 'text'){
         cell.value = value || fallback || '-';
         cell.font = { bold: true, color: { argb: XLSX_BLACK } };
       }
     }
-    fillValueCell(2, 4, typeA, valueA, fallbackA);
-    fillValueCell(6, 8, typeB, valueB, fallbackB);
+    if(single){
+      fillValueCell(1, 8, sType, sValue, sFallback);
+    } else {
+      fillValueCell(2, 4, typeA, valueA, fallbackA);
+      fillValueCell(6, 8, typeB, valueB, fallbackB);
+    }
     xlsxBorderRow(ws, valueRow);
     return valueRow + 1;
   }
@@ -3568,8 +3625,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       ['ID PLN / Kode Billing', siteInfo.idPln], ['Provider / No SIM', siteInfo.provider],
       ['Installation Vendor', siteInfo.installVendor], ['PIC Vendor Contact', siteInfo.picVendor],
       ['Installation Date', siteInfo.installDate], ['Commissioning Date', siteInfo.commissioningDate],
-      ['Customer', siteInfo.customer],
-      ['Progress (%)', progressPercent != null ? (progressPercent + '%') : '']
+      ['Customer', siteInfo.customer]
     ].forEach(function(r){ row = xlsxFieldRow(ws, row, r[0], r[1]); });
 
     return ws;
@@ -3697,12 +3753,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       xlsxBuildGroundingSheet(wb, data);
       xlsxBuildKwhAcCableSheet(wb, data);
 
-      var slug = (rec.plantName || 'laporan').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      var fileBase = buildExportFileBaseName(rec.plantName);
       return wb.xlsx.writeBuffer().then(function(buffer){
         var blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
-        a.href = url; a.download = 'laporan-' + slug + '.xlsx';
+        a.href = url; a.download = fileBase + '.xlsx';
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(url);
       });
