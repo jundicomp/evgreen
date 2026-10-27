@@ -1132,6 +1132,63 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
+  // ---------------- gradasi warna badge persentase progress (dashboard) ----------------
+  // Dulu badge progress di dashboard warnanya merah tetap untuk semua persentase < 100%
+  // (cuma yang 100% hijau). Sekarang warnanya dihitung mengikuti persentase: interpolasi
+  // HSL dari warna merah lama (0%) ke warna hijau "selesai" lama (100%), lewat oranye/kuning
+  // di tengah — jadi user bisa lihat sekilas progress-nya dari warnanya, bukan cuma angkanya.
+  var PROGRESS_BADGE_FROM_TEXT_HSL = rgbToHsl(hexToRgb('#b91c1c')); // merah (0%, warna lama)
+  var PROGRESS_BADGE_TO_TEXT_HSL = rgbToHsl(hexToRgb('#15803d'));   // hijau (100%, warna lama)
+  var PROGRESS_BADGE_FROM_BG_HSL = rgbToHsl(hexToRgb('#fee2e2'));
+  var PROGRESS_BADGE_TO_BG_HSL = rgbToHsl(hexToRgb('#dcfce7'));
+  function hexToRgb(hex){
+    hex = hex.replace('#', '');
+    return [parseInt(hex.slice(0,2),16), parseInt(hex.slice(2,4),16), parseInt(hex.slice(4,6),16)];
+  }
+  function rgbToHsl(rgb){
+    var r = rgb[0]/255, g = rgb[1]/255, b = rgb[2]/255;
+    var max = Math.max(r,g,b), min = Math.min(r,g,b);
+    var h, s, l = (max+min)/2;
+    if(max === min){ h = s = 0; }
+    else {
+      var d = max - min;
+      s = l > 0.5 ? d/(2-max-min) : d/(max+min);
+      switch(max){
+        case r: h = (g-b)/d + (g<b?6:0); break;
+        case g: h = (b-r)/d + 2; break;
+        default: h = (r-g)/d + 4; break;
+      }
+      h /= 6;
+    }
+    return [h*360, s*100, l*100];
+  }
+  function hslToHex(h, s, l){
+    s /= 100; l /= 100;
+    var c = (1 - Math.abs(2*l-1)) * s;
+    var x = c * (1 - Math.abs((h/60) % 2 - 1));
+    var m = l - c/2;
+    var r, g, b;
+    if(h < 60){ r=c; g=x; b=0; } else if(h < 120){ r=x; g=c; b=0; } else if(h < 180){ r=0; g=c; b=x; }
+    else if(h < 240){ r=0; g=x; b=c; } else if(h < 300){ r=x; g=0; b=c; } else { r=c; g=0; b=x; }
+    var R = Math.round((r+m)*255), G = Math.round((g+m)*255), B = Math.round((b+m)*255);
+    return '#' + [R,G,B].map(function(v){ return v.toString(16).padStart(2,'0'); }).join('');
+  }
+  function progressBadgeColors(percent){
+    var t = Math.max(0, Math.min(100, percent || 0)) / 100;
+    var lerp = function(a,b){ return a + (b-a)*t; };
+    var textHex = hslToHex(
+      lerp(PROGRESS_BADGE_FROM_TEXT_HSL[0], PROGRESS_BADGE_TO_TEXT_HSL[0]),
+      lerp(PROGRESS_BADGE_FROM_TEXT_HSL[1], PROGRESS_BADGE_TO_TEXT_HSL[1]),
+      lerp(PROGRESS_BADGE_FROM_TEXT_HSL[2], PROGRESS_BADGE_TO_TEXT_HSL[2])
+    );
+    var bgHex = hslToHex(
+      lerp(PROGRESS_BADGE_FROM_BG_HSL[0], PROGRESS_BADGE_TO_BG_HSL[0]),
+      lerp(PROGRESS_BADGE_FROM_BG_HSL[1], PROGRESS_BADGE_TO_BG_HSL[1]),
+      lerp(PROGRESS_BADGE_FROM_BG_HSL[2], PROGRESS_BADGE_TO_BG_HSL[2])
+    );
+    return { text: textHex, bg: bgHex };
+  }
+
   // Foto/logo/tanda-tangan yang sudah disinkron ke backend disimpan sebagai URL Google Drive
   // (https://drive.google.com/uc?id=...). Format "uc?id=" itu kadang gagal dimuat sebagai
   // <img> — terutama saat halaman dibuka langsung dari file lokal (file://) tanpa referrer —
@@ -2564,11 +2621,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
     dashListEl.innerHTML = filtered.map(function(r){
       var isDone = r.progressPercent >= 100;
+      var colors = progressBadgeColors(r.progressPercent);
+      var badgeStyle = 'color:' + colors.text + ';background:' + colors.bg + ';';
       var badge = isDone
-        ? '<div class="dash-card-badge done">✓</div>'
-        : '<div class="dash-card-badge">' + r.progressPercent + '%</div>';
+        ? '<div class="dash-card-badge done" style="' + badgeStyle + '">✓</div>'
+        : '<div class="dash-card-badge" style="' + badgeStyle + '">' + r.progressPercent + '%</div>';
+      // Kotak kartunya sendiri juga dikasih aksen warna yang sama dengan badge-nya (garis tebal
+      // di kiri + sedikit semburat warna latar) — supaya progress-nya kebaca sekilas dari warna
+      // kotaknya juga, bukan cuma dari angka/pill-nya.
+      var cardStyle = 'border-left:4px solid ' + colors.text + ';background:' + colors.bg + ';';
       var dateStr = r.updatedAt ? new Date(r.updatedAt).toLocaleString('id-ID') : '-';
-      return '<div class="dash-card" data-id="' + escapeHtml(r.id) + '" data-status="' + (isDone ? 'done' : 'progress') + '">' +
+      return '<div class="dash-card" data-id="' + escapeHtml(r.id) + '" data-status="' + (isDone ? 'done' : 'progress') + '" style="' + cardStyle + '">' +
           '<div class="dash-card-body">' +
             '<div class="dash-card-title">' + escapeHtml(r.plantName || '(Tanpa nama)') + '</div>' +
             '<div class="dash-card-sub">' + escapeHtml(r.plantAddress || '-') + '</div>' +
