@@ -1075,19 +1075,18 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   var currentTabIndex = 0;
   var chargers = [];      // {id, letter, photos:{}, simInfo:{}, _tabEl}
   var chargerCounter = 0;
-  var tailTabStart = -1;  // index in `tabs` where the fixed (non-charger) tail tabs begin
   var geoCache = null;
   var lastReportData = null;
   var currentReportId = null;
   var wizardInitialSnapshot = null; // JSON snapshot of collectReportData() taken right after opening/loading the wizard — used to detect if the user has actually changed anything
 
-  // site-level (once-per-report) photo stores
-  var groundingPhotos = {};
-  var fireExtPhotos = {};
-  var kwhInfo = {};       // KWH Meter, MCB PLN — fixed text values (no photo in the source report), read-only
-  var acPanelPhotos = {};
-  var acPanelInfo = {};   // AC Panel 6.2 Testing values (Voltage/Frequency) — fixed text values, read-only
-  var cablesPhotos = {};
+  // GROUNDING (Grounding System + Fire Extinguisher) dan KWH/AC PANEL/CABLE kini sama-sama
+  // "repeatable" seperti EV CHARGER — tiap unit punya tab sendiri (A, B, C, ...) lewat
+  // tombol "+ Tambah ... Lain", jadi datanya disimpan per-unit di array ini (bukan 1 set global lagi).
+  var groundings = [];     // {id, letter, groundingPhotos:{}, fireExtPhotos:{}, _tabEl}
+  var groundingCounter = 0;
+  var kwhAcCables = [];    // {id, letter, kwhInfo:{}, acPanelPhotos:{}, acPanelInfo:{}, cablesPhotos:{}, _tabEl}
+  var kwhAcCableCounter = 0;
   var signatures = {}; // personKey -> dataUrl
   var logos = {};      // vgreen / vendor -> dataUrl (no watermark, just a plain image upload)
 
@@ -1751,13 +1750,30 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return charger;
   }
 
-  function addChargerTabFor(charger){
-    var tab = buildChargerTab(charger);
-    var insertAt = (tailTabStart === -1) ? tabs.length : tailTabStart;
+  // Cari posisi tab terakhir dari satu "kind" tertentu (mis. 'charger', 'grounding',
+  // 'kwhAcCable') — dipakai supaya tab baru yang ditambah lewat tombol "+ Tambah ... Lain"
+  // selalu disisipkan tepat setelah unit sejenis yang terakhir, bukan di ujung array tabs
+  // (yang isinya APPROVAL/REVIEW). Kalau belum ada tab sejenis sama sekali (lagi dibangun
+  // pertama kali), ditaruh di akhir tabs saat ini — karena urutan pembangunannya selalu
+  // COVER → EV CHARGER* → GROUNDING* → KWH/AC PANEL/CABLE* → APPROVAL → REVIEW, itu otomatis
+  // jadi posisi yang benar (tepat setelah grup sebelumnya, sebelum grup berikutnya dibuat).
+  function lastTabIndexOfKind(kind){
+    for(var i = tabs.length - 1; i >= 0; i--){ if(tabs[i].kind === kind){ return i; } }
+    return -1;
+  }
+
+  function insertGroupTab(kind, tab){
+    var lastIdx = lastTabIndexOfKind(kind);
+    var insertAt = (lastIdx !== -1) ? lastIdx + 1 : tabs.length;
     tabs.splice(insertAt, 0, tab);
     var refEl = tabs[insertAt + 1] ? tabs[insertAt + 1].el : null;
     viewport.insertBefore(tab.el, refEl);
-    if(tailTabStart !== -1){ tailTabStart += 1; }
+    return tab;
+  }
+
+  function addChargerTabFor(charger){
+    var tab = buildChargerTab(charger);
+    insertGroupTab('charger', tab);
     refreshAddChargerButtons();
     return tab;
   }
@@ -1782,77 +1798,169 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
 
   // ---------------- GROUNDING tab (mirrors the "GROUNDING" sheet: Grounding System + Fire Extinguisher) ----------------
-  function buildGroundingTab(){
-    var page = makeTabPage('Grounding System & Fire Extinguisher', null);
+  // Sama seperti EV CHARGER: satu unit = satu tab penuh (Grounding System + Fire Extinguisher),
+  // dan "+ Tambah Grounding System Lain" menambah unit baru (B, C, ...) lewat tab terpisah.
+  function buildGroundingTab(unit){
+    var page = makeTabPage('Grounding System & Fire Extinguisher ' + unit.letter, null);
+    unit._tabEl = page;
 
     addSectionTitle(page, '3.', 'GROUNDING SYSTEM', true);
     addSectionSubtitle(page, '3.1 Grounding Visual Inspection');
     addFieldPairRow(page,
-      buildPhotoFieldEl(groundingPhotos, 'rodConnection', 'Grounding Rod Connection'),
-      buildPhotoFieldEl(groundingPhotos, 'connectedToCharger', 'Grounding Connected to EV Charger')
+      buildPhotoFieldEl(unit.groundingPhotos, 'rodConnection', 'Grounding Rod Connection'),
+      buildPhotoFieldEl(unit.groundingPhotos, 'connectedToCharger', 'Grounding Connected to EV Charger')
     );
     addSectionHint(page, 'Isi kedua titik kalau grounding memakai 2 titik tanam.');
     addFieldPairRow(page,
-      buildPhotoFieldEl(groundingPhotos, 'rodToEarth1', 'Grounding Rod to Earth - Titik 1'),
-      buildPhotoFieldEl(groundingPhotos, 'rodToEarth2', 'Grounding Rod to Earth - Titik 2')
+      buildPhotoFieldEl(unit.groundingPhotos, 'rodToEarth1', 'Grounding Rod to Earth - Titik 1'),
+      buildPhotoFieldEl(unit.groundingPhotos, 'rodToEarth2', 'Grounding Rod to Earth - Titik 2')
     );
     addFieldPairRow(page,
-      buildPhotoFieldEl(groundingPhotos, 'busbarPanelAc', 'Grounding Busbar in Panel AC'),
-      buildPhotoFieldEl(groundingPhotos, 'cableRoute', 'Grounding Cable Route')
+      buildPhotoFieldEl(unit.groundingPhotos, 'busbarPanelAc', 'Grounding Busbar in Panel AC'),
+      buildPhotoFieldEl(unit.groundingPhotos, 'cableRoute', 'Grounding Cable Route')
     );
-    addFieldPairRow(page, buildPhotoFieldEl(groundingPhotos, 'testOhm', 'Grounding Test (Ω)'), null);
+    addFieldPairRow(page, buildPhotoFieldEl(unit.groundingPhotos, 'testOhm', 'Grounding Test (Ω)'), null);
 
     addSectionTitle(page, '4.', 'FIRE EXTINGUISHER');
     addSectionSubtitle(page, '4.1 Visual Inspection');
     addFieldPairRow(page,
-      buildPhotoFieldEl(fireExtPhotos, 'frontView', 'Front View'),
-      buildPhotoFieldEl(fireExtPhotos, 'pressure', 'Pressure')
+      buildPhotoFieldEl(unit.fireExtPhotos, 'frontView', 'Front View'),
+      buildPhotoFieldEl(unit.fireExtPhotos, 'pressure', 'Pressure')
     );
     addFieldPairRow(page,
-      buildPhotoFieldEl(fireExtPhotos, 'placement', 'Placement'),
-      buildPhotoFieldEl(fireExtPhotos, 'specification', 'Specification')
+      buildPhotoFieldEl(unit.fireExtPhotos, 'placement', 'Placement'),
+      buildPhotoFieldEl(unit.fireExtPhotos, 'specification', 'Specification')
     );
 
-    return { id:'grounding', label:'GROUNDING', kind:'grounding', el: page };
+    var addRow = document.createElement('div');
+    addRow.className = 'choice-row';
+    addRow.innerHTML = '<button type="button" class="choice-btn secondary" data-action="add-grounding">+ Tambah Grounding System Lain</button>';
+    page.appendChild(addRow);
+
+    return { id: unit.id, label: 'GROUNDING ' + unit.letter, kind:'grounding', groundingId: unit.id, el: page, addRow: addRow };
+  }
+
+  function createGrounding(existingUnitData){
+    var unit = {
+      id: 'grounding_' + (++groundingCounter), letter: 'A',
+      groundingPhotos: (existingUnitData && existingUnitData.grounding && existingUnitData.grounding.photos) || {},
+      fireExtPhotos: (existingUnitData && existingUnitData.fireExtinguisher && existingUnitData.fireExtinguisher.photos) || {}
+    };
+    groundings.push(unit);
+    relabelGroundings();
+    return unit;
+  }
+
+  function addGroundingTabFor(unit){
+    var tab = buildGroundingTab(unit);
+    insertGroupTab('grounding', tab);
+    refreshAddGroundingButtons();
+    return tab;
+  }
+
+  function addGrounding(){
+    var unit = createGrounding(null);
+    return addGroundingTabFor(unit);
+  }
+
+  function relabelGroundings(){
+    groundings.forEach(function(u, idx){ u.letter = String.fromCharCode(65 + idx); });
+  }
+
+  function refreshAddGroundingButtons(){
+    if(!groundings.length) return;
+    var lastId = groundings[groundings.length - 1].id;
+    tabs.forEach(function(t){
+      if(t.kind === 'grounding' && t.addRow){
+        t.addRow.style.display = (t.groundingId === lastId) ? 'flex' : 'none';
+      }
+    });
   }
 
   // ---------------- KWH, AC PANEL, CABLE tab (mirrors that sheet) ----------------
-  function buildKwhAcCableTab(){
-    var page = makeTabPage('KWH Meter, AC Panel & Cables', null);
+  // Sama seperti EV CHARGER & GROUNDING: satu unit = satu tab penuh (KWH Meter + AC Panel +
+  // Cables), dan "+ Tambah Data KWH, AC Panel & Cable Lain" menambah unit baru lewat tab terpisah.
+  function buildKwhAcCableTab(unit){
+    var page = makeTabPage('KWH Meter, AC Panel & Cables ' + unit.letter, null);
+    unit._tabEl = page;
 
     addSectionTitle(page, '5.', 'KWH METER BANDING', true);
     addSectionSubtitle(page, '5.1 Visual Inspection');
     addFieldPairRow(page,
-      buildTextBoxFieldEl('kwhMeter', 'KWH Meter', 'Waiting Done KWH', kwhInfo.kwhMeter),
-      buildTextBoxFieldEl('mcbPln', 'MCB PLN', 'Waiting Done KWH', kwhInfo.mcbPln)
+      buildTextBoxFieldEl('kwhMeter', 'KWH Meter', 'Waiting Done KWH', unit.kwhInfo.kwhMeter),
+      buildTextBoxFieldEl('mcbPln', 'MCB PLN', 'Waiting Done KWH', unit.kwhInfo.mcbPln)
     );
 
     addSectionTitle(page, '6.', 'AC PANEL');
     addSectionSubtitle(page, '6.1 Visual Inspection');
     AC_PANEL_PAIRS.forEach(function(p){
-      addFieldPairRow(page, buildPhotoFieldEl(acPanelPhotos, p[0], p[1]), buildPhotoFieldEl(acPanelPhotos, p[2], p[3]));
+      addFieldPairRow(page, buildPhotoFieldEl(unit.acPanelPhotos, p[0], p[1]), buildPhotoFieldEl(unit.acPanelPhotos, p[2], p[3]));
     });
     addSectionSubtitle(page, '6.2 Testing');
     addFieldPairRow(page,
-      buildTextBoxFieldEl('testVoltageRS', 'Voltage (R-S)', 'Waiting Done KWH', acPanelInfo.testVoltageRS),
-      buildTextBoxFieldEl('testVoltageRT', 'Voltage (R-T)', 'Waiting Done KWH', acPanelInfo.testVoltageRT)
+      buildTextBoxFieldEl('testVoltageRS', 'Voltage (R-S)', 'Waiting Done KWH', unit.acPanelInfo.testVoltageRS),
+      buildTextBoxFieldEl('testVoltageRT', 'Voltage (R-T)', 'Waiting Done KWH', unit.acPanelInfo.testVoltageRT)
     );
     addFieldPairRow(page,
-      buildTextBoxFieldEl('testVoltageST', 'Voltage (S-T)', 'Waiting Done KWH', acPanelInfo.testVoltageST),
-      buildTextBoxFieldEl('testFrequency', 'Frequency', 'Waiting Done KWH', acPanelInfo.testFrequency)
+      buildTextBoxFieldEl('testVoltageST', 'Voltage (S-T)', 'Waiting Done KWH', unit.acPanelInfo.testVoltageST),
+      buildTextBoxFieldEl('testFrequency', 'Frequency', 'Waiting Done KWH', unit.acPanelInfo.testFrequency)
     );
     addFieldPairRow(page,
-      buildTextBoxFieldEl('testVoltageNG', 'Voltage (N-G)', 'Waiting Done KWH', acPanelInfo.testVoltageNG),
-      buildPhotoFieldEl(acPanelPhotos, 'testGroundingToAcPanel', 'Grounding to AC Panel')
+      buildTextBoxFieldEl('testVoltageNG', 'Voltage (N-G)', 'Waiting Done KWH', unit.acPanelInfo.testVoltageNG),
+      buildPhotoFieldEl(unit.acPanelPhotos, 'testGroundingToAcPanel', 'Grounding to AC Panel')
     );
 
     addSectionTitle(page, '7.', 'CABLES');
     addSectionSubtitle(page, '7.1 Visual Inspection');
     CABLES_PAIRS.forEach(function(p){
-      addFieldPairRow(page, buildPhotoFieldEl(cablesPhotos, p[0], p[1]), buildPhotoFieldEl(cablesPhotos, p[2], p[3]));
+      addFieldPairRow(page, buildPhotoFieldEl(unit.cablesPhotos, p[0], p[1]), buildPhotoFieldEl(unit.cablesPhotos, p[2], p[3]));
     });
 
-    return { id:'kwhAcCable', label:'KWH, AC PANEL, CABLE', kind:'kwhAcCable', el: page };
+    var addRow = document.createElement('div');
+    addRow.className = 'choice-row';
+    addRow.innerHTML = '<button type="button" class="choice-btn secondary" data-action="add-kwhAcCable">+ Tambah Data KWH, AC Panel &amp; Cable Lain</button>';
+    page.appendChild(addRow);
+
+    return { id: unit.id, label: 'KWH, AC PANEL, CABLE ' + unit.letter, kind:'kwhAcCable', kwhAcCableId: unit.id, el: page, addRow: addRow };
+  }
+
+  function createKwhAcCable(existingUnitData){
+    var unit = {
+      id: 'kwhAcCable_' + (++kwhAcCableCounter), letter: 'A',
+      kwhInfo: (existingUnitData && existingUnitData.kwhMeter && existingUnitData.kwhMeter.info) || {},
+      acPanelPhotos: (existingUnitData && existingUnitData.acPanel && existingUnitData.acPanel.photos) || {},
+      acPanelInfo: (existingUnitData && existingUnitData.acPanel && existingUnitData.acPanel.info) || {},
+      cablesPhotos: (existingUnitData && existingUnitData.cables && existingUnitData.cables.photos) || {}
+    };
+    kwhAcCables.push(unit);
+    relabelKwhAcCables();
+    return unit;
+  }
+
+  function addKwhAcCableTabFor(unit){
+    var tab = buildKwhAcCableTab(unit);
+    insertGroupTab('kwhAcCable', tab);
+    refreshAddKwhAcCableButtons();
+    return tab;
+  }
+
+  function addKwhAcCable(){
+    var unit = createKwhAcCable(null);
+    return addKwhAcCableTabFor(unit);
+  }
+
+  function relabelKwhAcCables(){
+    kwhAcCables.forEach(function(u, idx){ u.letter = String.fromCharCode(65 + idx); });
+  }
+
+  function refreshAddKwhAcCableButtons(){
+    if(!kwhAcCables.length) return;
+    var lastId = kwhAcCables[kwhAcCables.length - 1].id;
+    tabs.forEach(function(t){
+      if(t.kind === 'kwhAcCable' && t.addRow){
+        t.addRow.style.display = (t.kwhAcCableId === lastId) ? 'flex' : 'none';
+      }
+    });
   }
 
   // ---------------- APPROVAL tab (locked — filled later by an authorized signer) ----------------
@@ -1914,6 +2022,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         });
       }
       if(tab.kind === 'charger'){ refreshAddChargerButtons(); }
+      if(tab.kind === 'grounding'){ refreshAddGroundingButtons(); }
+      if(tab.kind === 'kwhAcCable'){ refreshAddKwhAcCableButtons(); }
     }
     viewport.scrollTop = 0;
   }
@@ -1925,10 +2035,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   nextBtn.addEventListener('click', function(){ confirmSaveThenProceed(goNext); });
 
   viewport.addEventListener('click', function(e){
-    var btn = e.target.closest('[data-action="add-charger"]');
-    if(!btn) return;
-    var newTab = addCharger();
-    showTab(tabs.indexOf(newTab));
+    var chargerBtn = e.target.closest('[data-action="add-charger"]');
+    if(chargerBtn){ var newChargerTab = addCharger(); showTab(tabs.indexOf(newChargerTab)); return; }
+    var groundingBtn = e.target.closest('[data-action="add-grounding"]');
+    if(groundingBtn){ var newGroundingTab = addGrounding(); showTab(tabs.indexOf(newGroundingTab)); return; }
+    var kwhBtn = e.target.closest('[data-action="add-kwhAcCable"]');
+    if(kwhBtn){ var newKwhTab = addKwhAcCable(); showTab(tabs.indexOf(newKwhTab)); return; }
   });
 
   // ---------------- data read helpers ----------------
@@ -1962,20 +2074,52 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return { letter: charger.letter, photos: charger.photos, simInfo: simInfo };
   }
 
+  // reads 1 unit grounding+APAR langsung dari object foto-nya sendiri (tidak perlu baca DOM,
+  // karena field-nya semua foto — ditulis langsung lewat closure `store` di buildPhotoFieldEl).
+  function readGroundingUnitData(unit){
+    return { letter: unit.letter, grounding: { photos: unit.groundingPhotos }, fireExtinguisher: { photos: unit.fireExtPhotos } };
+  }
+
   // reads the read-only KWH Meter + AC Panel testing text values straight from the DOM,
   // same approach as readChargerData's simInfo (these fields are disabled but may already
-  // hold a value hydrated from a previously saved report)
-  function readKwhAcCableInfo(){
-    var el = getTabEl('kwhAcCable');
+  // hold a value hydrated from a previously saved report) — di-scope ke tab unit ini sendiri
+  // (bukan getTabEl('kwhAcCable') global lagi) karena sekarang bisa ada >1 unit KWH/AC Panel/Cable.
+  function readKwhAcCableUnitData(unit){
+    var el = unit._tabEl;
     var g = function(key){ var node = el && el.querySelector('[data-field="' + key + '"]'); return node ? node.value.trim() : ''; };
-    return {
-      kwh: { kwhMeter: g('kwhMeter'), mcbPln: g('mcbPln') },
-      acPanel: {
-        testVoltageRS: g('testVoltageRS'), testVoltageRT: g('testVoltageRT'),
-        testVoltageST: g('testVoltageST'), testFrequency: g('testFrequency'),
-        testVoltageNG: g('testVoltageNG')
-      }
+    var kwh = { kwhMeter: g('kwhMeter'), mcbPln: g('mcbPln') };
+    var acInfo = {
+      testVoltageRS: g('testVoltageRS'), testVoltageRT: g('testVoltageRT'),
+      testVoltageST: g('testVoltageST'), testFrequency: g('testFrequency'),
+      testVoltageNG: g('testVoltageNG')
     };
+    unit.kwhInfo = kwh; unit.acPanelInfo = acInfo;
+    return {
+      letter: unit.letter,
+      kwhMeter: { info: kwh },
+      acPanel: { photos: unit.acPanelPhotos, info: acInfo },
+      cables: { photos: unit.cablesPhotos }
+    };
+  }
+
+  // ---------------- backward-compat: normalisasi data laporan lama (sebelum fitur "+ Tambah
+  // Grounding/KWH Lain" ini ada) yang cuma punya 1 set grounding/fireExtinguisher/kwhMeter/
+  // acPanel/cables langsung di root `data`, bukan array `groundings`/`kwhAcCables`. Dipakai di
+  // mana pun data laporan tersimpan dibaca langsung tanpa lewat wizard (export Excel dari
+  // dashboard, dsb.) supaya laporan lama tetap tampil & ter-export dengan benar.
+  function normalizeGroundingsData(data){
+    if(data && Array.isArray(data.groundings) && data.groundings.length){ return data.groundings; }
+    var gp = (data && data.grounding && data.grounding.photos) || {};
+    var fp = (data && data.fireExtinguisher && data.fireExtinguisher.photos) || {};
+    return [{ letter: 'A', grounding: { photos: gp }, fireExtinguisher: { photos: fp } }];
+  }
+  function normalizeKwhAcCablesData(data){
+    if(data && Array.isArray(data.kwhAcCables) && data.kwhAcCables.length){ return data.kwhAcCables; }
+    var kwh = (data && data.kwhMeter && data.kwhMeter.info) || {};
+    var apPhotos = (data && data.acPanel && data.acPanel.photos) || {};
+    var apInfo = (data && data.acPanel && data.acPanel.info) || {};
+    var cp = (data && data.cables && data.cables.photos) || {};
+    return [{ letter: 'A', kwhMeter: { info: kwh }, acPanel: { photos: apPhotos, info: apInfo }, cables: { photos: cp } }];
   }
 
   function readApproval(personKey){
@@ -2016,19 +2160,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function collectReportData(){
     var siteInfo = readSiteInfo();
     var chargersData = chargers.map(readChargerData);
+    var groundingsData = groundings.map(readGroundingUnitData);
+    var kwhAcCablesData = kwhAcCables.map(readKwhAcCableUnitData);
     var preparedBy = readApproval('preparedBy');
     var checkedBy = readApproval('checkedBy');
     var approvedBy = readApproval('approvedBy');
-    var kwhAcInfo = readKwhAcCableInfo();
-    kwhInfo = kwhAcInfo.kwh;
-    acPanelInfo = kwhAcInfo.acPanel;
     return {
       siteInfo: siteInfo, logos: logos, chargers: chargersData,
-      grounding: { photos: groundingPhotos },
-      fireExtinguisher: { photos: fireExtPhotos },
-      kwhMeter: { info: kwhInfo },
-      acPanel: { photos: acPanelPhotos, info: acPanelInfo },
-      cables: { photos: cablesPhotos },
+      groundings: groundingsData,
+      kwhAcCables: kwhAcCablesData,
       approval: { preparedBy: preparedBy, checkedBy: checkedBy, approvedBy: approvedBy, declaration: DECLARATION_TEXT }
     };
   }
@@ -2046,11 +2186,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     data.chargers.forEach(function(c){
       EV_CHARGER_PAIRS.forEach(function(p){ check(c.photos[p[0]]); check(c.photos[p[2]]); });
     });
-    ['rodConnection','connectedToCharger','rodToEarth1','rodToEarth2','busbarPanelAc','cableRoute','testOhm'].forEach(function(k){ check(data.grounding.photos[k]); });
-    ['frontView','placement','pressure','specification'].forEach(function(k){ check(data.fireExtinguisher.photos[k]); });
-    AC_PANEL_PAIRS.forEach(function(p){ check(data.acPanel.photos[p[0]]); check(data.acPanel.photos[p[2]]); });
-    check(data.acPanel.photos.testGroundingToAcPanel);
-    CABLES_PAIRS.forEach(function(p){ check(data.cables.photos[p[0]]); check(data.cables.photos[p[2]]); });
+    (data.groundings || []).forEach(function(u){
+      var gp = (u.grounding && u.grounding.photos) || {};
+      ['rodConnection','connectedToCharger','rodToEarth1','rodToEarth2','busbarPanelAc','cableRoute','testOhm'].forEach(function(k){ check(gp[k]); });
+      var fp = (u.fireExtinguisher && u.fireExtinguisher.photos) || {};
+      ['frontView','placement','pressure','specification'].forEach(function(k){ check(fp[k]); });
+    });
+    (data.kwhAcCables || []).forEach(function(u){
+      var ap = (u.acPanel && u.acPanel.photos) || {};
+      AC_PANEL_PAIRS.forEach(function(p){ check(ap[p[0]]); check(ap[p[2]]); });
+      check(ap.testGroundingToAcPanel);
+      var cp = (u.cables && u.cables.photos) || {};
+      CABLES_PAIRS.forEach(function(p){ check(cp[p[0]]); check(cp[p[2]]); });
+    });
     return total ? Math.round(filled / total * 100) : 0;
   }
 
@@ -2093,36 +2241,46 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       });
     });
 
-    html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">3. GROUNDING SYSTEM</td></tr>';
-    html += '<tr class="rp-sub-head"><td colspan="2">3.1 GROUNDING VISUAL INSPECTION</td></tr></table>';
-    html += pairRow(photoCell('Grounding Rod Connection', groundingPhotos.rodConnection), photoCell('Grounding Connected to EV Charger', groundingPhotos.connectedToCharger));
-    html += pairRow(photoCell('Grounding Rod to Earth - Titik 1', groundingPhotos.rodToEarth1), photoCell('Grounding Rod to Earth - Titik 2', groundingPhotos.rodToEarth2));
-    html += pairRow(photoCell('Grounding Busbar in Panel AC', groundingPhotos.busbarPanelAc), photoCell('Grounding Cable Route', groundingPhotos.cableRoute));
-    html += pairRow(photoCell('Grounding Test (Ω)', groundingPhotos.testOhm), '');
+    (data.groundings || []).forEach(function(u){
+      var gp = (u.grounding && u.grounding.photos) || {};
+      html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">3. GROUNDING SYSTEM - ' + u.letter + '</td></tr>';
+      html += '<tr class="rp-sub-head"><td colspan="2">3.1 GROUNDING VISUAL INSPECTION</td></tr></table>';
+      html += pairRow(photoCell('Grounding Rod Connection', gp.rodConnection), photoCell('Grounding Connected to EV Charger', gp.connectedToCharger));
+      html += pairRow(photoCell('Grounding Rod to Earth - Titik 1', gp.rodToEarth1), photoCell('Grounding Rod to Earth - Titik 2', gp.rodToEarth2));
+      html += pairRow(photoCell('Grounding Busbar in Panel AC', gp.busbarPanelAc), photoCell('Grounding Cable Route', gp.cableRoute));
+      html += pairRow(photoCell('Grounding Test (Ω)', gp.testOhm), '');
 
-    html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">4. FIRE EXTINGUISHER</td></tr>';
-    html += '<tr class="rp-sub-head"><td colspan="2">4.1 VISUAL INSPECTION</td></tr></table>';
-    html += pairRow(photoCell('Front View', fireExtPhotos.frontView), photoCell('Pressure', fireExtPhotos.pressure));
-    html += pairRow(photoCell('Placement', fireExtPhotos.placement), photoCell('Specification', fireExtPhotos.specification));
-
-    html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">5. KWH METER BANDING</td></tr>';
-    html += '<tr class="rp-sub-head"><td colspan="2">5.1 VISUAL INSPECTION</td></tr></table>';
-    html += pairRow(textBoxCell('KWH Meter', data.kwhMeter.info.kwhMeter, 'Waiting Done KWH'), textBoxCell('MCB PLN', data.kwhMeter.info.mcbPln, 'Waiting Done KWH'));
-
-    html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">6. AC PANEL</td></tr>';
-    html += '<tr class="rp-sub-head"><td colspan="2">6.1 VISUAL INSPECTION</td></tr></table>';
-    AC_PANEL_PAIRS.forEach(function(p){
-      html += pairRow(photoCell(p[1], acPanelPhotos[p[0]]), photoCell(p[3], acPanelPhotos[p[2]]));
+      var fp = (u.fireExtinguisher && u.fireExtinguisher.photos) || {};
+      html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">4. FIRE EXTINGUISHER - ' + u.letter + '</td></tr>';
+      html += '<tr class="rp-sub-head"><td colspan="2">4.1 VISUAL INSPECTION</td></tr></table>';
+      html += pairRow(photoCell('Front View', fp.frontView), photoCell('Pressure', fp.pressure));
+      html += pairRow(photoCell('Placement', fp.placement), photoCell('Specification', fp.specification));
     });
-    html += '<table class="rp-table"><tr class="rp-sub-head"><td colspan="2">6.2 TESTING</td></tr></table>';
-    html += pairRow(textBoxCell('Voltage (R-S)', data.acPanel.info.testVoltageRS, 'Waiting Done KWH'), textBoxCell('Voltage (R-T)', data.acPanel.info.testVoltageRT, 'Waiting Done KWH'));
-    html += pairRow(textBoxCell('Voltage (S-T)', data.acPanel.info.testVoltageST, 'Waiting Done KWH'), textBoxCell('Frequency', data.acPanel.info.testFrequency, 'Waiting Done KWH'));
-    html += pairRow(textBoxCell('Voltage (N-G)', data.acPanel.info.testVoltageNG, 'Waiting Done KWH'), photoCell('Grounding to AC Panel', acPanelPhotos.testGroundingToAcPanel));
 
-    html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">7. CABLES</td></tr>';
-    html += '<tr class="rp-sub-head"><td colspan="2">7.1 VISUAL INSPECTION</td></tr></table>';
-    CABLES_PAIRS.forEach(function(p){
-      html += pairRow(photoCell(p[1], cablesPhotos[p[0]]), photoCell(p[3], cablesPhotos[p[2]]));
+    (data.kwhAcCables || []).forEach(function(u){
+      var kwh = (u.kwhMeter && u.kwhMeter.info) || {};
+      html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">5. KWH METER BANDING - ' + u.letter + '</td></tr>';
+      html += '<tr class="rp-sub-head"><td colspan="2">5.1 VISUAL INSPECTION</td></tr></table>';
+      html += pairRow(textBoxCell('KWH Meter', kwh.kwhMeter, 'Waiting Done KWH'), textBoxCell('MCB PLN', kwh.mcbPln, 'Waiting Done KWH'));
+
+      var ap = (u.acPanel && u.acPanel.photos) || {};
+      var api = (u.acPanel && u.acPanel.info) || {};
+      html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">6. AC PANEL - ' + u.letter + '</td></tr>';
+      html += '<tr class="rp-sub-head"><td colspan="2">6.1 VISUAL INSPECTION</td></tr></table>';
+      AC_PANEL_PAIRS.forEach(function(p){
+        html += pairRow(photoCell(p[1], ap[p[0]]), photoCell(p[3], ap[p[2]]));
+      });
+      html += '<table class="rp-table"><tr class="rp-sub-head"><td colspan="2">6.2 TESTING</td></tr></table>';
+      html += pairRow(textBoxCell('Voltage (R-S)', api.testVoltageRS, 'Waiting Done KWH'), textBoxCell('Voltage (R-T)', api.testVoltageRT, 'Waiting Done KWH'));
+      html += pairRow(textBoxCell('Voltage (S-T)', api.testVoltageST, 'Waiting Done KWH'), textBoxCell('Frequency', api.testFrequency, 'Waiting Done KWH'));
+      html += pairRow(textBoxCell('Voltage (N-G)', api.testVoltageNG, 'Waiting Done KWH'), photoCell('Grounding to AC Panel', ap.testGroundingToAcPanel));
+
+      var cp = (u.cables && u.cables.photos) || {};
+      html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="2">7. CABLES - ' + u.letter + '</td></tr>';
+      html += '<tr class="rp-sub-head"><td colspan="2">7.1 VISUAL INSPECTION</td></tr></table>';
+      CABLES_PAIRS.forEach(function(p){
+        html += pairRow(photoCell(p[1], cp[p[0]]), photoCell(p[3], cp[p[2]]));
+      });
     });
 
     html += '<table class="rp-table"><tr class="rp-section-head"><td colspan="4">APPROVAL</td></tr>';
@@ -2191,8 +2349,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // ---------------- wizard build / reset / load ----------------
   function resetWizardState(){
     viewport.innerHTML = '';
-    tabs = []; chargers = []; chargerCounter = 0; tailTabStart = -1; currentTabIndex = 0;
-    groundingPhotos = {}; fireExtPhotos = {}; kwhInfo = {}; acPanelPhotos = {}; acPanelInfo = {}; cablesPhotos = {};
+    tabs = []; chargers = []; chargerCounter = 0; currentTabIndex = 0;
+    groundings = []; groundingCounter = 0;
+    kwhAcCables = []; kwhAcCableCounter = 0;
     signatures = {}; logos = {};
     wizardInitialSnapshot = null;
   }
@@ -2209,7 +2368,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return JSON.stringify(collectReportData()) !== wizardInitialSnapshot;
   }
 
-  function buildWizardShell(savedChargersData){
+  function buildWizardShell(savedChargersData, savedGroundingsData, savedKwhAcCablesData){
     var coverTab = buildCoverTab();
     tabs.push(coverTab); viewport.appendChild(coverTab.el);
 
@@ -2221,13 +2380,24 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     } else {
       addCharger();
     }
-    tailTabStart = tabs.length;
 
-    var groundingTab = buildGroundingTab();
-    tabs.push(groundingTab); viewport.appendChild(groundingTab.el);
+    if(savedGroundingsData && savedGroundingsData.length){
+      savedGroundingsData.forEach(function(gd){
+        var groundingUnit = createGrounding(gd);
+        addGroundingTabFor(groundingUnit);
+      });
+    } else {
+      addGrounding();
+    }
 
-    var kwhAcCableTab = buildKwhAcCableTab();
-    tabs.push(kwhAcCableTab); viewport.appendChild(kwhAcCableTab.el);
+    if(savedKwhAcCablesData && savedKwhAcCablesData.length){
+      savedKwhAcCablesData.forEach(function(kd){
+        var kwhUnit = createKwhAcCable(kd);
+        addKwhAcCableTabFor(kwhUnit);
+      });
+    } else {
+      addKwhAcCable();
+    }
 
     var approvalTab = buildApprovalTab();
     tabs.push(approvalTab); viewport.appendChild(approvalTab.el);
@@ -2251,7 +2421,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     // default the Vgreen Indonesia logo field to the brand logo on a brand-new report;
     // the field is still fully editable (a "Ganti Logo" button lets the tech replace it)
     logos.vgreen = VGREEN_LOGO_DATAURL;
-    buildWizardShell(null);
+    buildWizardShell(null, null, null);
     showTab(0);
     // deferred so it runs after the cover tab's own setTimeout(0) that auto-fills today's date —
     // otherwise that auto-fill would make the snapshot look "changed" a moment after opening
@@ -2262,19 +2432,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     resetWizardState();
     currentReportId = rec.id;
     var data = rec.data || {};
-    groundingPhotos = (data.grounding && data.grounding.photos) || {};
-    fireExtPhotos = (data.fireExtinguisher && data.fireExtinguisher.photos) || {};
-    kwhInfo = (data.kwhMeter && (data.kwhMeter.info || data.kwhMeter.photos)) || {};
-    acPanelPhotos = (data.acPanel && data.acPanel.photos) || {};
-    acPanelInfo = (data.acPanel && data.acPanel.info) || {};
-    cablesPhotos = (data.cables && data.cables.photos) || {};
     logos = data.logos || {};
     signatures = {};
     ['preparedBy','checkedBy','approvedBy'].forEach(function(k){
       if(data.approval && data.approval[k] && data.approval[k].signature){ signatures[k] = data.approval[k].signature; }
     });
 
-    buildWizardShell(data.chargers || []);
+    // normalizeGroundingsData/normalizeKwhAcCablesData juga menangani laporan lama (sebelum
+    // fitur "+ Tambah Grounding/KWH Lain" ada) yang masih berupa 1 set tunggal di root data.
+    buildWizardShell(data.chargers || [], normalizeGroundingsData(data), normalizeKwhAcCablesData(data));
 
     setTimeout(function(){
       var coverEl = getTabEl('cover');
@@ -2392,10 +2558,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     (data.chargers || []).forEach(function(c, i){
       jobs.push(uploadPhotoMap(c.photos, reportId + '_charger' + (i + 1)));
     });
-    jobs.push(uploadPhotoMap(data.grounding && data.grounding.photos, reportId + '_grounding'));
-    jobs.push(uploadPhotoMap(data.fireExtinguisher && data.fireExtinguisher.photos, reportId + '_fireext'));
-    jobs.push(uploadPhotoMap(data.acPanel && data.acPanel.photos, reportId + '_acpanel'));
-    jobs.push(uploadPhotoMap(data.cables && data.cables.photos, reportId + '_cables'));
+    (data.groundings || []).forEach(function(u, i){
+      jobs.push(uploadPhotoMap(u.grounding && u.grounding.photos, reportId + '_grounding' + (i + 1)));
+      jobs.push(uploadPhotoMap(u.fireExtinguisher && u.fireExtinguisher.photos, reportId + '_fireext' + (i + 1)));
+    });
+    (data.kwhAcCables || []).forEach(function(u, i){
+      jobs.push(uploadPhotoMap(u.acPanel && u.acPanel.photos, reportId + '_acpanel' + (i + 1)));
+      jobs.push(uploadPhotoMap(u.cables && u.cables.photos, reportId + '_cables' + (i + 1)));
+    });
     // tanda tangan (data.approval.<role>.signature) bukan flat map, ditangani terpisah
     ['preparedBy', 'checkedBy', 'approvedBy'].forEach(function(role){
       var p = data.approval && data.approval[role];
@@ -3685,50 +3855,60 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function xlsxBuildGroundingSheet(wb, data){
     var ws = xlsxNewSheet(wb, 'GROUNDING');
     var row = 1;
-    var gp = (data.grounding && data.grounding.photos) || {};
-    row = xlsxSectionRow(ws, row, '3. GROUNDING SYSTEM');
-    row = xlsxSubHeadRow(ws, row, '3.1 GROUNDING VISUAL INSPECTION');
-    row = xlsxPhotoPairRow(wb, ws, row, 'Grounding Rod Connection', gp.rodConnection, 'Grounding Connected to EV Charger', gp.connectedToCharger);
-    row = xlsxPhotoPairRow(wb, ws, row, 'Grounding Rod to Earth - Titik 1', gp.rodToEarth1, 'Grounding Rod to Earth - Titik 2', gp.rodToEarth2);
-    row = xlsxPhotoPairRow(wb, ws, row, 'Grounding Busbar in Panel AC', gp.busbarPanelAc, 'Grounding Cable Route', gp.cableRoute);
-    row = xlsxPhotoPairRow(wb, ws, row, 'Grounding Test (Ω)', gp.testOhm, null, null);
+    normalizeGroundingsData(data).forEach(function(u, idx){
+      // Baris pemisah kosong di ANTAR unit (bukan sesudah unit terakhir) — supaya untuk kasus
+      // 1 unit (paling umum) output-nya tetap identik dengan file referensi yang sudah dicocokkan.
+      if(idx > 0){ row++; }
+      var gp = (u.grounding && u.grounding.photos) || {};
+      row = xlsxSectionRow(ws, row, '3. GROUNDING SYSTEM - ' + u.letter);
+      row = xlsxSubHeadRow(ws, row, '3.1 GROUNDING VISUAL INSPECTION');
+      row = xlsxPhotoPairRow(wb, ws, row, 'Grounding Rod Connection', gp.rodConnection, 'Grounding Connected to EV Charger', gp.connectedToCharger);
+      row = xlsxPhotoPairRow(wb, ws, row, 'Grounding Rod to Earth - Titik 1', gp.rodToEarth1, 'Grounding Rod to Earth - Titik 2', gp.rodToEarth2);
+      row = xlsxPhotoPairRow(wb, ws, row, 'Grounding Busbar in Panel AC', gp.busbarPanelAc, 'Grounding Cable Route', gp.cableRoute);
+      row = xlsxPhotoPairRow(wb, ws, row, 'Grounding Test (Ω)', gp.testOhm, null, null);
 
-    row++;
-    var fp = (data.fireExtinguisher && data.fireExtinguisher.photos) || {};
-    row = xlsxSectionRow(ws, row, '4. FIRE EXTINGUISHER');
-    row = xlsxSubHeadRow(ws, row, '4.1 VISUAL INSPECTION');
-    row = xlsxPhotoPairRow(wb, ws, row, 'Front View', fp.frontView, 'Pressure', fp.pressure);
-    row = xlsxPhotoPairRow(wb, ws, row, 'Placement', fp.placement, 'Specification', fp.specification);
+      row++;
+      var fp = (u.fireExtinguisher && u.fireExtinguisher.photos) || {};
+      row = xlsxSectionRow(ws, row, '4. FIRE EXTINGUISHER - ' + u.letter);
+      row = xlsxSubHeadRow(ws, row, '4.1 VISUAL INSPECTION');
+      row = xlsxPhotoPairRow(wb, ws, row, 'Front View', fp.frontView, 'Pressure', fp.pressure);
+      row = xlsxPhotoPairRow(wb, ws, row, 'Placement', fp.placement, 'Specification', fp.specification);
+    });
     return ws;
   }
 
   function xlsxBuildKwhAcCableSheet(wb, data){
     var ws = xlsxNewSheet(wb, 'KWH, AC PANEL, CABLE');
     var row = 1;
-    var kwh = (data.kwhMeter && data.kwhMeter.info) || {};
-    row = xlsxSectionRow(ws, row, '5. KWH METER BANDING');
-    row = xlsxSubHeadRow(ws, row, '5.1 VISUAL INSPECTION');
-    row = xlsxTextPairRow(wb, ws, row, 'KWH Meter', kwh.kwhMeter, 'Waiting Done KWH', 'MCB PLN', kwh.mcbPln, 'Waiting Done KWH');
+    normalizeKwhAcCablesData(data).forEach(function(u, idx){
+      // Sama seperti di GROUNDING: baris pemisah kosong di ANTAR unit saja, bukan sesudah unit
+      // terakhir, supaya kasus 1 unit tetap identik dengan file referensi yang sudah dicocokkan.
+      if(idx > 0){ row++; }
+      var kwh = (u.kwhMeter && u.kwhMeter.info) || {};
+      row = xlsxSectionRow(ws, row, '5. KWH METER BANDING - ' + u.letter);
+      row = xlsxSubHeadRow(ws, row, '5.1 VISUAL INSPECTION');
+      row = xlsxTextPairRow(wb, ws, row, 'KWH Meter', kwh.kwhMeter, 'Waiting Done KWH', 'MCB PLN', kwh.mcbPln, 'Waiting Done KWH');
 
-    row++;
-    var ap = (data.acPanel && data.acPanel.photos) || {};
-    var api = (data.acPanel && data.acPanel.info) || {};
-    row = xlsxSectionRow(ws, row, '6. AC PANEL');
-    row = xlsxSubHeadRow(ws, row, '6.1 VISUAL INSPECTION');
-    AC_PANEL_PAIRS.forEach(function(p){
-      row = xlsxPhotoPairRow(wb, ws, row, p[1], ap[p[0]], p[3], ap[p[2]]);
-    });
-    row = xlsxSubHeadRow(ws, row, '6.2 TESTING');
-    row = xlsxTextPairRow(wb, ws, row, 'Voltage (R-S)', api.testVoltageRS, 'Waiting Done KWH', 'Voltage (R-T)', api.testVoltageRT, 'Waiting Done KWH');
-    row = xlsxTextPairRow(wb, ws, row, 'Voltage (S-T)', api.testVoltageST, 'Waiting Done KWH', 'Frequency', api.testFrequency, 'Waiting Done KWH');
-    row = xlsxCardPairRow(wb, ws, row, 'Voltage (N-G)', 'text', api.testVoltageNG, 'Waiting Done KWH', 'Grounding to AC Panel', 'photo', ap.testGroundingToAcPanel, null);
+      row++;
+      var ap = (u.acPanel && u.acPanel.photos) || {};
+      var api = (u.acPanel && u.acPanel.info) || {};
+      row = xlsxSectionRow(ws, row, '6. AC PANEL - ' + u.letter);
+      row = xlsxSubHeadRow(ws, row, '6.1 VISUAL INSPECTION');
+      AC_PANEL_PAIRS.forEach(function(p){
+        row = xlsxPhotoPairRow(wb, ws, row, p[1], ap[p[0]], p[3], ap[p[2]]);
+      });
+      row = xlsxSubHeadRow(ws, row, '6.2 TESTING');
+      row = xlsxTextPairRow(wb, ws, row, 'Voltage (R-S)', api.testVoltageRS, 'Waiting Done KWH', 'Voltage (R-T)', api.testVoltageRT, 'Waiting Done KWH');
+      row = xlsxTextPairRow(wb, ws, row, 'Voltage (S-T)', api.testVoltageST, 'Waiting Done KWH', 'Frequency', api.testFrequency, 'Waiting Done KWH');
+      row = xlsxCardPairRow(wb, ws, row, 'Voltage (N-G)', 'text', api.testVoltageNG, 'Waiting Done KWH', 'Grounding to AC Panel', 'photo', ap.testGroundingToAcPanel, null);
 
-    row++;
-    var cp = (data.cables && data.cables.photos) || {};
-    row = xlsxSectionRow(ws, row, '7. CABLES');
-    row = xlsxSubHeadRow(ws, row, '7.1 VISUAL INSPECTION');
-    CABLES_PAIRS.forEach(function(p){
-      row = xlsxPhotoPairRow(wb, ws, row, p[1], cp[p[0]], p[3], cp[p[2]]);
+      row++;
+      var cp = (u.cables && u.cables.photos) || {};
+      row = xlsxSectionRow(ws, row, '7. CABLES - ' + u.letter);
+      row = xlsxSubHeadRow(ws, row, '7.1 VISUAL INSPECTION');
+      CABLES_PAIRS.forEach(function(p){
+        row = xlsxPhotoPairRow(wb, ws, row, p[1], cp[p[0]], p[3], cp[p[2]]);
+      });
     });
 
     row++;
@@ -3752,15 +3932,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var photos = c.photos || {};
       EV_CHARGER_PAIRS.forEach(function(pair){ out.push(photos[pair[0]], photos[pair[2]]); });
     });
-    var gp = (data.grounding && data.grounding.photos) || {};
-    out.push(gp.rodConnection, gp.connectedToCharger, gp.rodToEarth1, gp.rodToEarth2, gp.busbarPanelAc, gp.cableRoute, gp.testOhm);
-    var fp = (data.fireExtinguisher && data.fireExtinguisher.photos) || {};
-    out.push(fp.frontView, fp.pressure, fp.placement, fp.specification);
-    var ap = (data.acPanel && data.acPanel.photos) || {};
-    AC_PANEL_PAIRS.forEach(function(p){ out.push(ap[p[0]], ap[p[2]]); });
-    out.push(ap.testGroundingToAcPanel);
-    var cp = (data.cables && data.cables.photos) || {};
-    CABLES_PAIRS.forEach(function(p){ out.push(cp[p[0]], cp[p[2]]); });
+    normalizeGroundingsData(data).forEach(function(u){
+      var gp = (u.grounding && u.grounding.photos) || {};
+      out.push(gp.rodConnection, gp.connectedToCharger, gp.rodToEarth1, gp.rodToEarth2, gp.busbarPanelAc, gp.cableRoute, gp.testOhm);
+      var fp = (u.fireExtinguisher && u.fireExtinguisher.photos) || {};
+      out.push(fp.frontView, fp.pressure, fp.placement, fp.specification);
+    });
+    normalizeKwhAcCablesData(data).forEach(function(u){
+      var ap = (u.acPanel && u.acPanel.photos) || {};
+      AC_PANEL_PAIRS.forEach(function(p){ out.push(ap[p[0]], ap[p[2]]); });
+      out.push(ap.testGroundingToAcPanel);
+      var cp = (u.cables && u.cables.photos) || {};
+      CABLES_PAIRS.forEach(function(p){ out.push(cp[p[0]], cp[p[2]]); });
+    });
     var approval = data.approval || {};
     ['preparedBy', 'checkedBy', 'approvedBy'].forEach(function(k){
       if(approval[k] && approval[k].signature){ out.push(approval[k].signature); }
